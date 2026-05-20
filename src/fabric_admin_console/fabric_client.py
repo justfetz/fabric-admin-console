@@ -191,6 +191,21 @@ class FabricClient:
             path += f"?type={item_type}"
         return self.get(path)
 
+    def get_pipeline_definition(self, workspace_id: str, pipeline_id: str):
+        return self.post(f"/workspaces/{workspace_id}/dataPipelines/{pipeline_id}/getDefinition")
+
+    def run_pipeline(self, workspace_id: str, pipeline_id: str, parameters=None):
+        body = None
+        if parameters:
+            body = {"executionData": {"parameters": parameters}}
+        return self.post(
+            f"/workspaces/{workspace_id}/items/{pipeline_id}/jobs/instances?jobType=Pipeline",
+            body,
+        )
+
+    def get_job_status(self, workspace_id: str, item_id: str, job_id: str):
+        return self.get(f"/workspaces/{workspace_id}/items/{item_id}/jobs/instances/{job_id}")
+
     def list_connections(self):
         return self.get("/connections")
 

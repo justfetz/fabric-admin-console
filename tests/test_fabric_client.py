@@ -52,3 +52,25 @@ def test_pbi_request_wraps_list_payload():
         with patch("fabric_admin_console.fabric_client.requests.request", return_value=response):
             result = client._pbi_request("GET", "/groups/test")
     assert result == {"value": [{"status": "ok"}]}
+
+
+def test_run_pipeline_wraps_parameter_payload():
+    client = make_client()
+    with patch.object(client, "post", return_value={"ok": True}) as post:
+        client.run_pipeline("ws", "pipe", parameters={"batch": {"value": "42", "type": "string"}})
+    assert post.call_args.args[0].endswith("/items/pipe/jobs/instances?jobType=Pipeline")
+    assert post.call_args.args[1]["executionData"]["parameters"]["batch"]["value"] == "42"
+
+
+def test_get_pipeline_definition_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "post", return_value={"ok": True}) as post:
+        client.get_pipeline_definition("ws", "pipe")
+    assert post.call_args.args[0] == "/workspaces/ws/dataPipelines/pipe/getDefinition"
+
+
+def test_get_job_status_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "get", return_value={"status": "Completed"}) as get:
+        client.get_job_status("ws", "pipe", "job-1")
+    assert get.call_args.args[0] == "/workspaces/ws/items/pipe/jobs/instances/job-1"
