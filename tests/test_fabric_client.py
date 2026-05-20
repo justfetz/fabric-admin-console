@@ -74,3 +74,26 @@ def test_get_job_status_uses_expected_path():
     with patch.object(client, "get", return_value={"status": "Completed"}) as get:
         client.get_job_status("ws", "pipe", "job-1")
     assert get.call_args.args[0] == "/workspaces/ws/items/pipe/jobs/instances/job-1"
+
+
+def test_create_schedule_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "post", return_value={"ok": True}) as post:
+        client.create_schedule("ws", "pipe", "Pipeline", {"enabled": True})
+    assert post.call_args.args[0] == "/workspaces/ws/items/pipe/jobs/Pipeline/schedules"
+
+
+def test_deployment_stage_items_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "get", return_value={"value": []}) as get:
+        client.get_deployment_stage_items("dp", "stage")
+    assert get.call_args.args[0] == "/deploymentPipelines/dp/stages/stage/items"
+
+
+def test_deploy_stage_posts_body_to_deploy_endpoint():
+    client = make_client()
+    body = {"sourceStageId": "a", "targetStageId": "b"}
+    with patch.object(client, "post", return_value={"ok": True}) as post:
+        client.deploy_stage("dp", body)
+    assert post.call_args.args[0] == "/deploymentPipelines/dp/deploy"
+    assert post.call_args.args[1] == body

@@ -8,6 +8,9 @@ This public-safe version is designed to help operators and engineers:
 
 - authenticate to the Fabric REST API with a service principal
 - inspect workspaces and items
+- compare and submit deployment-pipeline promotions
+- run smart deploys that exclude known unsupported item types
+- diagnose workspace item drift and folder path collisions
 - query Fabric Capacity Metrics through the Power BI Execute Queries API
 - build higher-level admin workflows without hard-coding tenant-specific values
 
@@ -28,7 +31,7 @@ The original internal version contained tenant-specific identifiers and environm
 - `src/fabric_admin_console/capacity_metrics.py`
   - DAX query helpers and CLI-friendly metrics formatting
 - `src/fabric_admin_console/admin_console.py`
-  - interactive CLI shell and reusable picker / display helpers
+  - interactive CLI shell, deployment workflows, and reusable picker / display helpers
 - `tests/`
   - regression tests for sanitization-safe helpers and API request normalization
 
@@ -53,6 +56,27 @@ or after editable install:
 
 ```powershell
 fabric-admin-console
+```
+
+Current interactive menus include:
+
+- `Doctor`
+- `Workspaces`
+- `Pipelines`
+- `Deployments`
+- `Semantic Models`
+- `Capacity`
+
+Deployment IDs stay outside the code. Configure these through `.env` when using deployment workflows:
+
+```powershell
+DEPLOY_PIPELINE_ID=...
+STAGE_DEV=...
+STAGE_PILOT=...
+STAGE_PROD=...
+WS_DEV=...
+WS_PILOT=...
+WS_PROD=...
 ```
 
 ## Tests

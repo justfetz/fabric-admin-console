@@ -206,6 +206,27 @@ class FabricClient:
     def get_job_status(self, workspace_id: str, item_id: str, job_id: str):
         return self.get(f"/workspaces/{workspace_id}/items/{item_id}/jobs/instances/{job_id}")
 
+    def create_schedule(self, workspace_id: str, item_id: str, job_type: str, schedule_config):
+        return self.post(
+            f"/workspaces/{workspace_id}/items/{item_id}/jobs/{job_type}/schedules",
+            schedule_config,
+        )
+
+    def list_deployment_pipelines(self):
+        return self.get("/deploymentPipelines")
+
+    def get_deployment_pipeline(self, pipeline_id: str):
+        return self.get(f"/deploymentPipelines/{pipeline_id}")
+
+    def get_deployment_stages(self, pipeline_id: str):
+        return self.get(f"/deploymentPipelines/{pipeline_id}/stages")
+
+    def get_deployment_stage_items(self, pipeline_id: str, stage_id: str):
+        return self.get(f"/deploymentPipelines/{pipeline_id}/stages/{stage_id}/items")
+
+    def deploy_stage(self, pipeline_id: str, body: dict):
+        return self.post(f"/deploymentPipelines/{pipeline_id}/deploy", body)
+
     def list_connections(self):
         return self.get("/connections")
 
