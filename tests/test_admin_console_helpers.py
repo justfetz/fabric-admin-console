@@ -439,6 +439,69 @@ def test_cmd_semantic_models_binds_existing_connection(monkeypatch, capsys):
     assert called["args"] == ("ws-1", "sm-1", "conn-1", "SQL", "server;db")
 
 
+def test_cmd_semantic_models_warns_when_no_shared_connections_available(monkeypatch, capsys):
+    answers = iter(["4", "1", "1", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def get_sm_connections(self, workspace_id, model_id):
+            return {"value": []}
+
+        def list_connections(self):
+            return {"value": []}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "No shared connections available." in out
+
+
+def test_cmd_semantic_models_requires_manual_connection_path(monkeypatch, capsys):
+    answers = iter(["4", "1", "1", "n", "SQL", "", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def get_sm_connections(self, workspace_id, model_id):
+            return {"value": []}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Connection path is required." in out
+
+
+def test_cmd_semantic_models_reports_bind_failure(monkeypatch, capsys):
+    answers = iter(["4", "1", "1", "n", "SQL", "server;db", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def get_sm_connections(self, workspace_id, model_id):
+            return {"value": []}
+
+        def bind_sm_connection(self, workspace_id, model_id, connection_id, connection_type="SQL", connection_path=None):
+            return {"error": True, "status": 400, "detail": {"message": "bad bind"}}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Connection binding failed" in out
+
+
 def test_cmd_semantic_models_triggers_refresh(monkeypatch, capsys):
     answers = iter(["6", "1", "1", "y", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
@@ -459,6 +522,25 @@ def test_cmd_semantic_models_triggers_refresh(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Refresh submitted for Finance Model" in out
     assert called["args"] == ("ws-1", "sm-1")
+
+
+def test_cmd_semantic_models_reports_refresh_failure(monkeypatch, capsys):
+    answers = iter(["6", "1", "1", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def refresh_dataset(self, workspace_id, model_id):
+            return {"error": True, "status": 500, "detail": {"message": "refresh failed"}}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Refresh failed:" in out
 
 
 def test_cmd_semantic_models_takes_over_model(monkeypatch, capsys):
@@ -483,6 +565,25 @@ def test_cmd_semantic_models_takes_over_model(monkeypatch, capsys):
     assert called["args"] == ("ws-1", "sm-1")
 
 
+def test_cmd_semantic_models_reports_takeover_failure(monkeypatch, capsys):
+    answers = iter(["5", "1", "1", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def takeover_dataset(self, workspace_id, model_id):
+            return {"error": True, "status": 403, "detail": {"message": "forbidden"}}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Takeover failed:" in out
+
+
 def test_cmd_workspace_git_shows_connection(monkeypatch, capsys):
     answers = iter(["1", "1", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
@@ -505,6 +606,70 @@ def test_cmd_workspace_git_shows_connection(monkeypatch, capsys):
     assert "Git connection: Ops" in out
     assert "fabric-repo" in out
     assert "main" in out
+
+
+def test_cmd_workspace_git_reports_connection_failure(monkeypatch, capsys):
+    answers = iter(["1", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_connection(self, workspace_id):
+            return {"error": True, "status": 404, "detail": {"message": "not connected"}}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Git connection lookup failed:" in out
+
+
+def test_cmd_workspace_git_reports_status_failure(monkeypatch, capsys):
+    answers = iter(["2", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {"error": True, "status": 500, "detail": {"message": "status failed"}}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Git status failed:" in out
+
+
+def test_cmd_workspace_git_reports_update_failure(monkeypatch, capsys):
+    answers = iter(["3", "1", "", "y", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def update_from_git(self, workspace_id, body):
+            return {"error": True, "status": 409, "detail": {"message": "conflict"}}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Update from Git failed:" in out
+
+
+def test_cmd_workspace_git_reports_commit_all_failure(monkeypatch, capsys):
+    answers = iter(["4", "1", "Workspace sync", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def commit_to_git(self, workspace_id, body):
+            return {"error": True, "status": 500, "detail": {"message": "commit failed"}}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Commit to Git failed:" in out
 
 
 def test_cmd_workspace_git_commits_selected_changes(monkeypatch, capsys):
@@ -556,6 +721,45 @@ def test_cmd_workspace_git_rejects_invalid_selected_changes(monkeypatch, capsys)
     cmd_workspace_git(FakeClient())
     out = capsys.readouterr().out
     assert "No valid changes selected." in out
+
+
+def test_cmd_workspace_git_warns_when_no_selective_changes_available(monkeypatch, capsys):
+    answers = iter(["5", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {"changes": []}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "No Git changes available for selective commit." in out
+
+
+def test_cmd_workspace_git_reports_selective_commit_failure(monkeypatch, capsys):
+    answers = iter(["5", "1", "1", "Selective sync", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {
+                "changes": [
+                    {"itemId": "item-1", "itemType": "Notebook", "displayName": "Ops Notebook", "workspaceChange": "Modified", "remoteChange": "Same"},
+                ]
+            }
+
+        def commit_to_git(self, workspace_id, body):
+            return {"error": True, "status": 500, "detail": {"message": "commit failed"}}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Selective commit failed:" in out
 
 
 def test_cmd_deployments_compares_stages(monkeypatch, capsys):
