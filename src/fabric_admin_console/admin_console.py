@@ -197,6 +197,49 @@ def print_config_summary(config=None):
         print(f"    {env.name:<12} workspace={workspace}  stage={stage}")
 
 
+def home_screen_rows(config, visible_workspace_count=None):
+    workspace_count = configured_workspace_count(config)
+    env_count = len(config.environments)
+    deploy_ready = bool(get_active_deploy_pipeline_id(config)) and env_count >= 2
+    visible = "?" if visible_workspace_count is None else str(visible_workspace_count)
+    return [
+        ("Configured environments", str(env_count)),
+        ("Configured workspaces", str(workspace_count)),
+        ("Visible Fabric workspaces", visible),
+        ("Deployment pipeline", "ready" if deploy_ready else "not ready"),
+        ("Config file", str(get_config_path())),
+    ]
+
+
+def home_screen_shortcuts(config):
+    shortcuts = []
+    if should_offer_setup(config):
+        shortcuts.append("Setup      Define your real environment names and workspace IDs")
+    else:
+        shortcuts.append("Doctor     Validate auth, config, and workspace visibility")
+        shortcuts.append("Deployments Compare and promote between configured environments")
+        shortcuts.append("Semantic Models Inspect bindings, refreshes, and ownership")
+        shortcuts.append("Workspace Git Inspect connection, status, update, and commit flows")
+        shortcuts.append("Capacity   Review CU usage, item types, and top consumers")
+    return shortcuts
+
+
+def print_home_screen(client, config):
+    visible_workspace_count = None
+    try:
+        visible_workspace_count = len(safe_values(client.list_workspaces()))
+    except Exception:
+        visible_workspace_count = None
+
+    print(f"\n  {C.BOLD}READY CHECK{C.END}\n")
+    for label, value in home_screen_rows(config, visible_workspace_count):
+        print(f"    {label:<26} {value}")
+
+    print(f"\n  {C.BOLD}START HERE{C.END}\n")
+    for shortcut in home_screen_shortcuts(config):
+        print(f"    - {shortcut}")
+
+
 def _get_nested_val(data, *keys):
     current = data
     for key in keys:
@@ -1298,6 +1341,9 @@ def main():
         info("Run Setup once to define the environment names and workspace IDs you actually use.")
         if confirm("Launch Setup now?", "y"):
             cmd_setup()
+            active_config = get_active_config()
+
+    print_home_screen(client, active_config)
 
     while True:
         print(

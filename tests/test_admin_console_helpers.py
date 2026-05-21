@@ -21,7 +21,10 @@ from fabric_admin_console.admin_console import (
     git_status_summary,
     git_status_summary_lines,
     git_status_changes,
+    home_screen_rows,
+    home_screen_shortcuts,
     pipeline_terminal_state,
+    print_home_screen,
     print_config_summary,
     pick_pipeline,
     pick_semantic_model,
@@ -292,6 +295,56 @@ def test_print_config_summary_shows_environments(monkeypatch, capsys):
     assert "DEV" in out
     assert "ws-dev" in out
     assert "PROD" in out
+
+
+def test_home_screen_rows_show_config_health(monkeypatch):
+    monkeypatch.setattr(admin_console, "get_config_path", lambda: "C:/fake/.fabric-admin-console/config.toml")
+    rows = home_screen_rows(
+        FabricAdminConfig(
+            deployment_pipeline_id="dp-1",
+            environments=(
+                FabricEnvironment("DEV", "ws-dev", "stage-dev"),
+                FabricEnvironment("PROD", "ws-prod", "stage-prod"),
+            ),
+        ),
+        visible_workspace_count=4,
+    )
+    assert ("Configured environments", "2") in rows
+    assert ("Configured workspaces", "2") in rows
+    assert ("Visible Fabric workspaces", "4") in rows
+    assert ("Deployment pipeline", "ready") in rows
+
+
+def test_home_screen_shortcuts_prioritize_setup_when_unconfigured():
+    shortcuts = home_screen_shortcuts(
+        FabricAdminConfig(
+            environments=(FabricEnvironment("DEV", "", ""),),
+        )
+    )
+    assert shortcuts[0].startswith("Setup")
+
+
+def test_print_home_screen_shows_ready_check_and_shortcuts(monkeypatch, capsys):
+    monkeypatch.setattr(admin_console, "get_config_path", lambda: "C:/fake/.fabric-admin-console/config.toml")
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+    print_home_screen(
+        FakeClient(),
+        FabricAdminConfig(
+            deployment_pipeline_id="dp-1",
+            environments=(
+                FabricEnvironment("DEV", "ws-dev", "stage-dev"),
+                FabricEnvironment("PROD", "ws-prod", "stage-prod"),
+            ),
+        ),
+    )
+    out = capsys.readouterr().out
+    assert "READY CHECK" in out
+    assert "START HERE" in out
+    assert "Deployments" in out
 
 
 def test_select_git_changes_ignores_invalid_indexes():
