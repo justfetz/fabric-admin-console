@@ -227,6 +227,18 @@ class FabricClient:
     def deploy_stage(self, pipeline_id: str, body: dict):
         return self.post(f"/deploymentPipelines/{pipeline_id}/deploy", body)
 
+    def get_git_connection(self, workspace_id: str):
+        return self.get(f"/workspaces/{workspace_id}/git/connection")
+
+    def get_git_status(self, workspace_id: str):
+        return self.get(f"/workspaces/{workspace_id}/git/status")
+
+    def commit_to_git(self, workspace_id: str, body: dict):
+        return self.post(f"/workspaces/{workspace_id}/git/commitToGit", body)
+
+    def update_from_git(self, workspace_id: str, body: dict):
+        return self.post(f"/workspaces/{workspace_id}/git/updateFromGit", body)
+
     def list_connections(self):
         return self.get("/connections")
 

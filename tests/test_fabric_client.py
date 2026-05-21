@@ -108,6 +108,38 @@ def test_deploy_stage_posts_body_to_deploy_endpoint():
     assert post.call_args.args[1] == body
 
 
+def test_get_git_connection_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "get", return_value={"branchName": "main"}) as get:
+        client.get_git_connection("ws")
+    assert get.call_args.args[0] == "/workspaces/ws/git/connection"
+
+
+def test_get_git_status_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "get", return_value={"changes": []}) as get:
+        client.get_git_status("ws")
+    assert get.call_args.args[0] == "/workspaces/ws/git/status"
+
+
+def test_commit_to_git_posts_expected_path():
+    client = make_client()
+    body = {"mode": "All", "comment": "sync"}
+    with patch.object(client, "post", return_value={"status": "Succeeded"}) as post:
+        client.commit_to_git("ws", body)
+    assert post.call_args.args[0] == "/workspaces/ws/git/commitToGit"
+    assert post.call_args.args[1] == body
+
+
+def test_update_from_git_posts_expected_path():
+    client = make_client()
+    body = {"conflictResolution": {"conflictResolutionType": "PreferRemote"}}
+    with patch.object(client, "post", return_value={"status": "Succeeded"}) as post:
+        client.update_from_git("ws", body)
+    assert post.call_args.args[0] == "/workspaces/ws/git/updateFromGit"
+    assert post.call_args.args[1] == body
+
+
 def test_list_connections_uses_expected_path():
     client = make_client()
     with patch.object(client, "get", return_value={"value": []}) as get:

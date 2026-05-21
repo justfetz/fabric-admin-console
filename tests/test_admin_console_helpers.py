@@ -7,11 +7,16 @@ from fabric_admin_console.admin_console import (
     compare_workspace_items,
     cmd_deployments,
     cmd_setup,
+    cmd_workspace_git,
     detect_folder_path_collisions,
     cmd_pipelines,
     cmd_semantic_models,
+    build_commit_to_git_body,
+    build_update_from_git_body,
     extract_folder_fields,
     get_required_env_status,
+    git_connection_summary,
+    git_status_changes,
     pick_pipeline,
     pick_semantic_model,
     normalize_path,
@@ -176,6 +181,41 @@ def test_semantic_model_connection_helpers_prefer_nested_details():
     assert semantic_model_connection_type(connection) == "SQL"
     assert semantic_model_connection_path(connection) == "server;database"
     assert semantic_model_connection_label(connection) == "Pilot SQL [SQL] | server;database"
+
+
+def test_git_connection_summary_uses_provider_details():
+    summary = git_connection_summary(
+        {
+            "gitProviderType": "AzureDevOps",
+            "branchName": "main",
+            "directoryName": "/fabric",
+            "gitProviderDetails": {"repositoryName": "fabric-repo"},
+        }
+    )
+    assert summary == {
+        "provider": "AzureDevOps",
+        "repository": "fabric-repo",
+        "branch": "main",
+        "directory": "/fabric",
+    }
+
+
+def test_git_status_changes_prefers_changes_key():
+    status = {"changes": [{"itemId": "1"}], "value": [{"itemId": "2"}]}
+    assert git_status_changes(status) == [{"itemId": "1"}]
+
+
+def test_build_commit_to_git_body_supports_all_and_selective_modes():
+    all_body = build_commit_to_git_body("sync")
+    selective_body = build_commit_to_git_body("sync", [{"itemId": "a"}])
+    assert all_body == {"mode": "All", "comment": "sync"}
+    assert selective_body == {"mode": "Selective", "comment": "sync", "items": [{"itemId": "a"}]}
+
+
+def test_build_update_from_git_body_supports_remote_hash_and_policy():
+    body = build_update_from_git_body("abc123", "PreferWorkspace")
+    assert body["remoteCommitHash"] == "abc123"
+    assert body["conflictResolution"]["conflictResolutionType"] == "PreferWorkspace"
 
 
 def test_run_doctor_reports_basic_health(monkeypatch, capsys):
@@ -394,6 +434,61 @@ def test_cmd_semantic_models_takes_over_model(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Takeover submitted for Finance Model" in out
     assert called["args"] == ("ws-1", "sm-1")
+
+
+def test_cmd_workspace_git_shows_connection(monkeypatch, capsys):
+    answers = iter(["1", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_connection(self, workspace_id):
+            assert workspace_id == "ws-1"
+            return {
+                "gitProviderType": "AzureDevOps",
+                "branchName": "main",
+                "directoryName": "/fabric",
+                "gitProviderDetails": {"repositoryName": "fabric-repo"},
+            }
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Git connection: Ops" in out
+    assert "fabric-repo" in out
+    assert "main" in out
+
+
+def test_cmd_workspace_git_commits_selected_changes(monkeypatch, capsys):
+    answers = iter(["5", "1", "1,2", "Selective sync", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    called = {}
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            assert workspace_id == "ws-1"
+            return {
+                "changes": [
+                    {"itemId": "item-1", "itemType": "Notebook", "displayName": "Ops Notebook", "workspaceChange": "Modified", "remoteChange": "Same"},
+                    {"itemId": "item-2", "itemType": "Report", "displayName": "Ops Report", "workspaceChange": "Added", "remoteChange": "Same"},
+                ]
+            }
+
+        def commit_to_git(self, workspace_id, body):
+            called["args"] = (workspace_id, body)
+            return {"status": "Succeeded"}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Selective commit submitted for Ops" in out
+    assert called["args"][0] == "ws-1"
+    assert called["args"][1]["mode"] == "Selective"
+    assert called["args"][1]["comment"] == "Selective sync"
+    assert called["args"][1]["items"] == [{"itemId": "item-1"}, {"itemId": "item-2"}]
 
 
 def test_cmd_deployments_compares_stages(monkeypatch, capsys):

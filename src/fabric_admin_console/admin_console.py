@@ -415,6 +415,64 @@ def print_refresh_history_runs(history, model_name):
         print(f"    {start:<20} {end:<20} {rtype:<12} {status}")
 
 
+def git_connection_summary(connection):
+    if not isinstance(connection, dict):
+        return {"provider": "?", "repository": "?", "branch": "?", "directory": "/"}
+    details = connection.get("gitProviderDetails") if isinstance(connection.get("gitProviderDetails"), dict) else {}
+    return {
+        "provider": connection.get("gitProviderType") or details.get("provider") or "?",
+        "repository": details.get("repositoryName") or details.get("repository") or connection.get("repositoryName") or "?",
+        "branch": connection.get("branchName") or details.get("branchName") or details.get("branch") or "?",
+        "directory": connection.get("directoryName") or details.get("directoryName") or "/",
+    }
+
+
+def git_change_identifier(change):
+    return change.get("itemId") or change.get("objectId") or change.get("path") or "?"
+
+
+def git_change_label(change):
+    item_type = change.get("itemType") or change.get("type") or "?"
+    display_name = change.get("displayName") or change.get("name") or git_change_identifier(change)
+    workspace_state = change.get("workspaceChange") or change.get("workspaceState") or "-"
+    remote_state = change.get("remoteChange") or change.get("remoteState") or "-"
+    return f"{item_type}: {display_name} | workspace={workspace_state} remote={remote_state}"
+
+
+def git_status_changes(status):
+    if not isinstance(status, dict):
+        return []
+    for key in ("changes", "value", "items"):
+        value = status.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def build_commit_to_git_body(comment, changes=None):
+    body = {"mode": "All", "comment": comment}
+    if changes:
+        body["mode"] = "Selective"
+        body["items"] = [{"itemId": git_change_identifier(change)} for change in changes]
+    return body
+
+
+def build_update_from_git_body(remote_commit_hash=None, conflict_resolution_policy="PreferRemote"):
+    body = {"conflictResolution": {"conflictResolutionType": conflict_resolution_policy}}
+    if remote_commit_hash:
+        body["remoteCommitHash"] = remote_commit_hash
+    return body
+
+
+def print_git_status_changes(changes, title):
+    print(f"\n  {C.BOLD}{title}{C.END}\n")
+    if not changes:
+        warn("No Git changes reported.")
+        return
+    for index, change in enumerate(changes, 1):
+        print(f"    {index:3d}  {git_change_label(change)}")
+
+
 def detect_folder_path_collisions(items):
     by_norm = {}
     for item in items:
@@ -1005,6 +1063,128 @@ def cmd_semantic_models(client):
             fail("Invalid option.")
 
 
+def cmd_workspace_git(client):
+    while True:
+        print(
+            f"""
+  {C.BOLD}WORKSPACE GIT{C.END}
+
+    {C.CYAN}1{C.END}  Show Git connection             Inspect provider, repo, branch, and directory
+    {C.CYAN}2{C.END}  Show Git status                 Inspect pending workspace/remote differences
+    {C.CYAN}3{C.END}  Update from Git                 Pull remote content into the workspace
+    {C.CYAN}4{C.END}  Commit all to Git               Push current workspace changes with one comment
+    {C.CYAN}5{C.END}  Commit selected changes         Commit only selected changed items
+    {C.DIM}  0  Back{C.END}
+"""
+        )
+        choice = prompt("Choice")
+        if choice == "0" or choice is None:
+            return
+
+        if choice == "1":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            connection = client.get_git_connection(workspace["id"])
+            if connection and connection.get("error"):
+                fail(f"Git connection lookup failed: {connection}")
+                continue
+            summary = git_connection_summary(connection)
+            print(f"\n  {C.BOLD}Git connection: {workspace['displayName']}{C.END}\n")
+            print(f"    Provider   {summary['provider']}")
+            print(f"    Repository {summary['repository']}")
+            print(f"    Branch     {summary['branch']}")
+            print(f"    Directory  {summary['directory']}")
+
+        elif choice == "2":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            status = client.get_git_status(workspace["id"])
+            if status and status.get("error"):
+                fail(f"Git status failed: {status}")
+                continue
+            changes = git_status_changes(status)
+            print_git_status_changes(changes, f"Git status for {workspace['displayName']}")
+
+        elif choice == "3":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            remote_commit_hash = prompt("Remote commit hash (blank for latest)", "")
+            prefer_remote = confirm("Prefer remote changes if conflicts occur?", "y")
+            body = build_update_from_git_body(
+                remote_commit_hash=remote_commit_hash or None,
+                conflict_resolution_policy="PreferRemote" if prefer_remote else "PreferWorkspace",
+            )
+            warn("Update from Git will apply remote content into this workspace.")
+            if not confirm(f"Proceed with update for {workspace['displayName']}?", "n"):
+                continue
+            result = client.update_from_git(workspace["id"], body)
+            if result and not result.get("error"):
+                ok(f"Update from Git submitted for {workspace['displayName']}")
+                show_json(result)
+            else:
+                fail(f"Update from Git failed: {result}")
+
+        elif choice == "4":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            comment = prompt("Commit comment", "Workspace sync from Fabric Admin Console")
+            body = build_commit_to_git_body(comment)
+            if not confirm(f"Commit all changes from {workspace['displayName']} to Git?", "y"):
+                continue
+            result = client.commit_to_git(workspace["id"], body)
+            if result and not result.get("error"):
+                ok(f"Commit to Git submitted for {workspace['displayName']}")
+                show_json(result)
+            else:
+                fail(f"Commit to Git failed: {result}")
+
+        elif choice == "5":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            status = client.get_git_status(workspace["id"])
+            if status and status.get("error"):
+                fail(f"Git status failed: {status}")
+                continue
+            changes = git_status_changes(status)
+            if not changes:
+                warn("No Git changes available for selective commit.")
+                continue
+            print_git_status_changes(changes, f"Select changes for {workspace['displayName']}")
+            raw_indexes = prompt("Indexes to commit (comma-separated)")
+            selected = []
+            for raw_index in (raw_indexes or "").replace(";", ",").split(","):
+                raw_index = raw_index.strip()
+                if not raw_index:
+                    continue
+                try:
+                    idx = int(raw_index) - 1
+                except ValueError:
+                    continue
+                if 0 <= idx < len(changes):
+                    selected.append(changes[idx])
+            if not selected:
+                fail("No valid changes selected.")
+                continue
+            comment = prompt("Commit comment", "Selective workspace sync from Fabric Admin Console")
+            body = build_commit_to_git_body(comment, selected)
+            if not confirm(f"Commit {len(selected)} selected change(s) from {workspace['displayName']}?", "y"):
+                continue
+            result = client.commit_to_git(workspace["id"], body)
+            if result and not result.get("error"):
+                ok(f"Selective commit submitted for {workspace['displayName']}")
+                show_json(result)
+            else:
+                fail(f"Selective commit failed: {result}")
+
+        else:
+            fail("Invalid option.")
+
+
 def main():
     banner()
     try:
@@ -1025,8 +1205,9 @@ def main():
     {C.CYAN}4{C.END}  Pipelines          List and run Fabric pipelines
     {C.CYAN}5{C.END}  Deployments        Compare, deploy, and diagnose environment differences
     {C.CYAN}6{C.END}  Semantic Models    Inspect models and refresh history
-    {C.CYAN}7{C.END}  Capacity           Show capacity metrics dashboard
-    {C.CYAN}8{C.END}  Raw workspace JSON Inspect one workspace record
+    {C.CYAN}7{C.END}  Workspace Git      Inspect and sync Git-connected workspaces
+    {C.CYAN}8{C.END}  Capacity           Show capacity metrics dashboard
+    {C.CYAN}9{C.END}  Raw workspace JSON Inspect one workspace record
     {C.DIM}  0  Exit{C.END}
 """
         )
@@ -1047,8 +1228,10 @@ def main():
         elif choice == "6":
             cmd_semantic_models(client)
         elif choice == "7":
-            show_capacity_dashboard(client)
+            cmd_workspace_git(client)
         elif choice == "8":
+            show_capacity_dashboard(client)
+        elif choice == "9":
             workspace = pick_workspace(client)
             if workspace:
                 show_json(workspace)
