@@ -18,6 +18,8 @@ from fabric_admin_console.admin_console import (
     extract_folder_fields,
     get_required_env_status,
     git_connection_summary,
+    git_workspace_states,
+    filter_git_changes_by_workspace_state,
     git_status_summary,
     git_status_summary_lines,
     git_status_changes,
@@ -251,6 +253,7 @@ def test_git_status_summary_groups_workspace_and_remote_states():
     assert summary["workspace"]["Modified"] == 2
     assert summary["remote"]["Same"] == 1
     assert summary["remote"]["Behind"] == 1
+    assert summary["item_types"] == {"Unknown": 2}
 
 
 def test_git_status_summary_lines_render_card():
@@ -259,10 +262,21 @@ def test_git_status_summary_lines_render_card():
             "total": 2,
             "workspace": {"Modified": 2},
             "remote": {"Behind": 1, "Same": 1},
+            "item_types": {"Notebook": 1, "Report": 1},
         }
     )
     assert lines[0].startswith("    +")
     assert any("Total changes" in line for line in lines)
+
+
+def test_git_workspace_state_helpers_group_and_filter_changes():
+    changes = [
+        {"itemId": "1", "workspaceChange": "Modified"},
+        {"itemId": "2", "workspaceChange": "Added"},
+        {"itemId": "3", "workspaceChange": "Modified"},
+    ]
+    assert git_workspace_states(changes) == ["Added", "Modified"]
+    assert [item["itemId"] for item in filter_git_changes_by_workspace_state(changes, ["Modified"])] == ["1", "3"]
 
 
 def test_build_commit_to_git_body_supports_all_and_selective_modes():
@@ -855,6 +869,70 @@ def test_cmd_workspace_git_commits_selected_changes(monkeypatch, capsys):
     assert called["args"][1]["mode"] == "Selective"
     assert called["args"][1]["comment"] == "Selective sync"
     assert called["args"][1]["items"] == [{"itemId": "item-1"}, {"itemId": "item-2"}]
+
+
+def test_cmd_workspace_git_commits_by_workspace_state(monkeypatch, capsys):
+    answers = iter(["6", "1", "Modified", "State sync", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    called = {}
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {
+                "changes": [
+                    {"itemId": "item-1", "itemType": "Notebook", "displayName": "Ops Notebook", "workspaceChange": "Modified", "remoteChange": "Same"},
+                    {"itemId": "item-2", "itemType": "Report", "displayName": "Ops Report", "workspaceChange": "Added", "remoteChange": "Same"},
+                ]
+            }
+
+        def commit_to_git(self, workspace_id, body):
+            called["args"] = (workspace_id, body)
+            return {"status": "Succeeded"}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "State-based commit submitted for Ops" in out
+    assert called["args"][1]["mode"] == "Selective"
+    assert called["args"][1]["items"] == [{"itemId": "item-1"}]
+
+
+def test_cmd_workspace_git_rejects_missing_state_match(monkeypatch, capsys):
+    answers = iter(["6", "1", "Deleted", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {
+                "changes": [
+                    {"itemId": "item-1", "itemType": "Notebook", "displayName": "Ops Notebook", "workspaceChange": "Modified", "remoteChange": "Same"},
+                ]
+            }
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "No changes matched the selected workspace states." in out
+
+
+def test_cmd_workspace_git_shows_raw_status(monkeypatch, capsys):
+    answers = iter(["7", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {"changes": [{"itemId": "item-1"}]}
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert '"itemId": "item-1"' in out
 
 
 def test_cmd_workspace_git_rejects_invalid_selected_changes(monkeypatch, capsys):

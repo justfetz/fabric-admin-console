@@ -599,23 +599,28 @@ def git_status_summary(changes):
         "total": len(changes),
         "workspace": {},
         "remote": {},
+        "item_types": {},
     }
     for change in changes:
         workspace_state = change.get("workspaceChange") or change.get("workspaceState") or "Unknown"
         remote_state = change.get("remoteChange") or change.get("remoteState") or "Unknown"
+        item_type = change.get("itemType") or change.get("type") or "Unknown"
         summary["workspace"][workspace_state] = summary["workspace"].get(workspace_state, 0) + 1
         summary["remote"][remote_state] = summary["remote"].get(remote_state, 0) + 1
+        summary["item_types"][item_type] = summary["item_types"].get(item_type, 0) + 1
     return summary
 
 
 def git_status_summary_lines(summary):
     workspace_bits = ", ".join(f"{key}={value}" for key, value in sorted(summary["workspace"].items())) or "-"
     remote_bits = ", ".join(f"{key}={value}" for key, value in sorted(summary["remote"].items())) or "-"
+    item_type_bits = ", ".join(f"{key}={value}" for key, value in sorted(summary["item_types"].items())) or "-"
     return [
         "    +-----------------------------------------------------------+",
         f"    |  Total changes: {summary['total']:<42}|",
         f"    |  Workspace:     {workspace_bits[:42]:<42}|",
         f"    |  Remote:        {remote_bits[:42]:<42}|",
+        f"    |  Item types:    {item_type_bits[:42]:<42}|",
         "    +-----------------------------------------------------------+",
     ]
 
@@ -624,6 +629,26 @@ def print_git_status_summary(changes, workspace_name):
     print(f"\n  {C.BOLD}Git status summary: {workspace_name}{C.END}\n")
     for line in git_status_summary_lines(git_status_summary(changes)):
         print(line)
+
+
+def git_workspace_states(changes):
+    return sorted(
+        {
+            change.get("workspaceChange") or change.get("workspaceState") or "Unknown"
+            for change in changes
+        }
+    )
+
+
+def filter_git_changes_by_workspace_state(changes, states):
+    target_states = {state.strip() for state in states if state.strip()}
+    if not target_states:
+        return []
+    return [
+        change
+        for change in changes
+        if (change.get("workspaceChange") or change.get("workspaceState") or "Unknown") in target_states
+    ]
 
 
 def detect_folder_path_collisions(items):
@@ -1223,6 +1248,8 @@ def cmd_workspace_git(client):
     {C.CYAN}3{C.END}  Update from Git                 Pull remote content into the workspace
     {C.CYAN}4{C.END}  Commit all to Git               Push current workspace changes with one comment
     {C.CYAN}5{C.END}  Commit selected changes         Commit only selected changed items
+    {C.CYAN}6{C.END}  Commit by workspace state       Commit all Added/Modified/etc changes
+    {C.CYAN}7{C.END}  Show raw Git status             Inspect the full Git status payload
     {C.DIM}  0  Back{C.END}
 """
         )
@@ -1321,6 +1348,53 @@ def cmd_workspace_git(client):
                 show_json(result)
             else:
                 fail(f"Selective commit failed: {result}")
+
+        elif choice == "6":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            status = client.get_git_status(workspace["id"])
+            if status and status.get("error"):
+                fail(f"Git status failed: {status}")
+                continue
+            changes = git_status_changes(status)
+            if not changes:
+                warn("No Git changes available for state-based commit.")
+                continue
+            print_git_status_summary(changes, workspace["displayName"])
+            states = git_workspace_states(changes)
+            print(f"\n  {C.BOLD}Available workspace states{C.END}\n")
+            for state in states:
+                count = len(filter_git_changes_by_workspace_state(changes, [state]))
+                print(f"    - {state} ({count})")
+            raw_states = prompt("Workspace states to commit (comma-separated)", ",".join(states))
+            selected = filter_git_changes_by_workspace_state(
+                changes,
+                [state.strip() for state in (raw_states or "").replace(";", ",").split(",")],
+            )
+            if not selected:
+                fail("No changes matched the selected workspace states.")
+                continue
+            comment = prompt("Commit comment", "State-based workspace sync from Fabric Admin Console")
+            body = build_commit_to_git_body(comment, selected)
+            if not confirm(f"Commit {len(selected)} change(s) from {workspace['displayName']}?", "y"):
+                continue
+            result = client.commit_to_git(workspace["id"], body)
+            if result and not result.get("error"):
+                ok(f"State-based commit submitted for {workspace['displayName']}")
+                show_json(result)
+            else:
+                fail(f"State-based commit failed: {result}")
+
+        elif choice == "7":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            status = client.get_git_status(workspace["id"])
+            if status and status.get("error"):
+                fail(f"Git status failed: {status}")
+                continue
+            show_json(status)
 
         else:
             fail("Invalid option.")
