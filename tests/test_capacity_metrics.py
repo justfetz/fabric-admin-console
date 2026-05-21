@@ -6,6 +6,10 @@ from fabric_admin_console.capacity_metrics import (
     _fmt_num,
     _pct,
     _summary_box_lines,
+    show_all,
+    show_cu_by_item_kind,
+    show_cu_by_workspace,
+    show_top_items,
     show_capacity_summary,
 )
 
@@ -79,3 +83,82 @@ def test_show_capacity_summary_prints_capacity_overview(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "FABRIC CAPACITY METRICS SUMMARY" in out
     assert "F64 Demo" in out
+
+
+def test_show_cu_by_workspace_prints_workspace_chart(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "fabric_admin_console.capacity_metrics._execute_dax",
+        lambda token, query: [
+            {
+                "MetricsByItem[WorkspaceId]": "ws-1",
+                "TotalCU": 1000,
+                "TotalOps": 10,
+                "Failures": 1,
+                "Workspace": "Ops",
+            }
+        ],
+    )
+    show_cu_by_workspace("token")
+    out = capsys.readouterr().out
+    assert "CAPACITY BY WORKSPACE" in out
+    assert "Ops" in out
+
+
+def test_show_cu_by_item_kind_prints_item_type_chart(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "fabric_admin_console.capacity_metrics._execute_dax",
+        lambda token, query: [
+            {
+                "MetricsByItem[ArtifactKind]": "DataPipeline",
+                "TotalCU": 1000,
+                "TotalOps": 10,
+                "Failures": 1,
+            }
+        ],
+    )
+    show_cu_by_item_kind("token")
+    out = capsys.readouterr().out
+    assert "CAPACITY BY ITEM TYPE" in out
+    assert "DataPipeline" in out
+
+
+def test_show_top_items_prints_ranked_items(monkeypatch, capsys):
+    def fake_execute(_token, query):
+        if "SELECTCOLUMNS" in query:
+            return [
+                {
+                    "Items[ItemId]": "abc",
+                    "Items[ItemName]": "Dataset One",
+                    "Items[ItemKind]": "SemanticModel",
+                    "Items[WorkspaceName]": "Pilot",
+                }
+            ]
+        return [
+            {
+                "MetricsByItem[ItemId]": "abc",
+                "MetricsByItem[ArtifactKind]": "SemanticModel",
+                "MetricsByItem[sum_CU]": 500,
+                "MetricsByItem[count_operations]": 3,
+            }
+        ]
+
+    monkeypatch.setattr("fabric_admin_console.capacity_metrics._execute_dax", fake_execute)
+    show_top_items("token", limit=5)
+    out = capsys.readouterr().out
+    assert "TOP 5 ITEMS BY CU" in out
+    assert "Dataset One" in out
+
+
+def test_show_all_prints_multiple_sections(monkeypatch, capsys):
+    def fake_execute(_token, query):
+        if "TOPN(1, Capacities)" in query:
+            return [{"Capacities[Capacity Name]": "F64 Demo"}]
+        if "SELECTCOLUMNS" in query:
+            return []
+        return []
+
+    monkeypatch.setattr("fabric_admin_console.capacity_metrics._execute_dax", fake_execute)
+    show_all("token")
+    out = capsys.readouterr().out
+    assert "FABRIC CAPACITY METRICS SUMMARY" in out
+    assert "CAPACITY BY WORKSPACE" in out

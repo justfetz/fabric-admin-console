@@ -420,6 +420,31 @@ def print_semantic_model_connections(connections, title):
         print(f"         {C.DIM}{conn_id}{C.END}")
 
 
+def semantic_model_connection_card_lines(connection):
+    name = semantic_model_connection_name(connection)
+    ctype = semantic_model_connection_type(connection)
+    path = semantic_model_connection_path(connection) or "-"
+    conn_id = connection.get("id", "-")
+    return [
+        "    +-----------------------------------------------------------+",
+        f"    |  Name: {name:<52}|",
+        f"    |  Type: {ctype:<52}|",
+        f"    |  Path: {path[:52]:<52}|",
+        f"    |  Id:   {conn_id[:52]:<52}|",
+        "    +-----------------------------------------------------------+",
+    ]
+
+
+def print_semantic_model_connection_cards(connections, title):
+    print(f"\n  {C.BOLD}{title}{C.END}\n")
+    if not connections:
+        warn("No connections found.")
+        return
+    for connection in connections:
+        for line in semantic_model_connection_card_lines(connection):
+            print(line)
+
+
 def print_refresh_history_runs(history, model_name):
     print(f"\n  {C.BOLD}Refresh history: {model_name}{C.END}\n")
     if not history:
@@ -524,6 +549,38 @@ def print_git_status_changes(changes, title):
         return
     for index, change in enumerate(changes, 1):
         print(f"    {index:3d}  {git_change_label(change)}")
+
+
+def git_status_summary(changes):
+    summary = {
+        "total": len(changes),
+        "workspace": {},
+        "remote": {},
+    }
+    for change in changes:
+        workspace_state = change.get("workspaceChange") or change.get("workspaceState") or "Unknown"
+        remote_state = change.get("remoteChange") or change.get("remoteState") or "Unknown"
+        summary["workspace"][workspace_state] = summary["workspace"].get(workspace_state, 0) + 1
+        summary["remote"][remote_state] = summary["remote"].get(remote_state, 0) + 1
+    return summary
+
+
+def git_status_summary_lines(summary):
+    workspace_bits = ", ".join(f"{key}={value}" for key, value in sorted(summary["workspace"].items())) or "-"
+    remote_bits = ", ".join(f"{key}={value}" for key, value in sorted(summary["remote"].items())) or "-"
+    return [
+        "    +-----------------------------------------------------------+",
+        f"    |  Total changes: {summary['total']:<42}|",
+        f"    |  Workspace:     {workspace_bits[:42]:<42}|",
+        f"    |  Remote:        {remote_bits[:42]:<42}|",
+        "    +-----------------------------------------------------------+",
+    ]
+
+
+def print_git_status_summary(changes, workspace_name):
+    print(f"\n  {C.BOLD}Git status summary: {workspace_name}{C.END}\n")
+    for line in git_status_summary_lines(git_status_summary(changes)):
+        print(line)
 
 
 def detect_folder_path_collisions(items):
@@ -995,7 +1052,7 @@ def cmd_semantic_models(client):
             if not model:
                 continue
             connections = safe_values(client.get_sm_connections(workspace["id"], model["id"]))
-            print_semantic_model_connections(
+            print_semantic_model_connection_cards(
                 connections,
                 f"Connections for {model['displayName']}",
             )
@@ -1013,7 +1070,7 @@ def cmd_semantic_models(client):
                 continue
             current_connections = safe_values(client.get_sm_connections(workspace["id"], model["id"]))
             if current_connections:
-                print_semantic_model_connections(
+                print_semantic_model_connection_cards(
                     current_connections,
                     f"Current bindings for {model['displayName']}",
                 )
@@ -1154,6 +1211,7 @@ def cmd_workspace_git(client):
                 fail(f"Git status failed: {status}")
                 continue
             changes = git_status_changes(status)
+            print_git_status_summary(changes, workspace["displayName"])
             print_git_status_changes(changes, f"Git status for {workspace['displayName']}")
 
         elif choice == "3":
@@ -1203,6 +1261,7 @@ def cmd_workspace_git(client):
             if not changes:
                 warn("No Git changes available for selective commit.")
                 continue
+            print_git_status_summary(changes, workspace["displayName"])
             print_git_status_changes(changes, f"Select changes for {workspace['displayName']}")
             raw_indexes = prompt("Indexes to commit (comma-separated)")
             selected = select_git_changes(changes, raw_indexes)

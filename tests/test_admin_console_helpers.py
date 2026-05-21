@@ -18,6 +18,8 @@ from fabric_admin_console.admin_console import (
     extract_folder_fields,
     get_required_env_status,
     git_connection_summary,
+    git_status_summary,
+    git_status_summary_lines,
     git_status_changes,
     pipeline_terminal_state,
     print_config_summary,
@@ -32,6 +34,7 @@ from fabric_admin_console.admin_console import (
     split_smart_deploy_items,
     run_doctor,
     safe_values,
+    semantic_model_connection_card_lines,
     semantic_model_connection_label,
     semantic_model_connection_path,
     semantic_model_connection_type,
@@ -200,6 +203,18 @@ def test_semantic_model_connection_helpers_prefer_nested_details():
     assert semantic_model_connection_label(connection) == "Pilot SQL [SQL] | server;database"
 
 
+def test_semantic_model_connection_card_lines_render_card():
+    lines = semantic_model_connection_card_lines(
+        {
+            "displayName": "Pilot SQL",
+            "id": "conn-1",
+            "connectionDetails": {"type": "SQL", "path": "server;database"},
+        }
+    )
+    assert lines[0].startswith("    +")
+    assert any("Pilot SQL" in line for line in lines)
+
+
 def test_git_connection_summary_uses_provider_details():
     summary = git_connection_summary(
         {
@@ -220,6 +235,31 @@ def test_git_connection_summary_uses_provider_details():
 def test_git_status_changes_prefers_changes_key():
     status = {"changes": [{"itemId": "1"}], "value": [{"itemId": "2"}]}
     assert git_status_changes(status) == [{"itemId": "1"}]
+
+
+def test_git_status_summary_groups_workspace_and_remote_states():
+    summary = git_status_summary(
+        [
+            {"workspaceChange": "Modified", "remoteChange": "Same"},
+            {"workspaceChange": "Modified", "remoteChange": "Behind"},
+        ]
+    )
+    assert summary["total"] == 2
+    assert summary["workspace"]["Modified"] == 2
+    assert summary["remote"]["Same"] == 1
+    assert summary["remote"]["Behind"] == 1
+
+
+def test_git_status_summary_lines_render_card():
+    lines = git_status_summary_lines(
+        {
+            "total": 2,
+            "workspace": {"Modified": 2},
+            "remote": {"Behind": 1, "Same": 1},
+        }
+    )
+    assert lines[0].startswith("    +")
+    assert any("Total changes" in line for line in lines)
 
 
 def test_build_commit_to_git_body_supports_all_and_selective_modes():
@@ -426,6 +466,7 @@ def test_cmd_semantic_models_shows_model_connections(monkeypatch, capsys):
     cmd_semantic_models(FakeClient())
     out = capsys.readouterr().out
     assert "Connections for Finance Model" in out
+    assert "+-----------------------------------------------------------+" in out
     assert "Pilot SQL" in out
     assert "server;db" in out
 
@@ -639,6 +680,33 @@ def test_cmd_workspace_git_shows_connection(monkeypatch, capsys):
     assert "Git connection: Ops" in out
     assert "fabric-repo" in out
     assert "main" in out
+
+
+def test_cmd_workspace_git_shows_status_summary_before_changes(monkeypatch, capsys):
+    answers = iter(["2", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {
+                "changes": [
+                    {
+                        "itemId": "item-1",
+                        "itemType": "Notebook",
+                        "displayName": "Ops Notebook",
+                        "workspaceChange": "Modified",
+                        "remoteChange": "Same",
+                    }
+                ]
+            }
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "Git status summary: Ops" in out
+    assert "Total changes:" in out
 
 
 def test_cmd_workspace_git_reports_connection_failure(monkeypatch, capsys):
