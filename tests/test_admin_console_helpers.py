@@ -13,12 +13,14 @@ from fabric_admin_console.admin_console import (
     cmd_semantic_models,
     build_commit_to_git_body,
     build_update_from_git_body,
+    configured_workspace_count,
     decode_pipeline_definition_payload,
     extract_folder_fields,
     get_required_env_status,
     git_connection_summary,
     git_status_changes,
     pipeline_terminal_state,
+    print_config_summary,
     pick_pipeline,
     pick_semantic_model,
     normalize_path,
@@ -26,6 +28,7 @@ from fabric_admin_console.admin_console import (
     pick_from_list,
     resolve_best_path,
     select_git_changes,
+    should_offer_setup,
     split_smart_deploy_items,
     run_doctor,
     safe_values,
@@ -48,6 +51,17 @@ def test_normalize_path_collapses_slashes_and_case():
 
 def test_parse_environment_names_deduplicates_and_uppercases():
     assert parse_environment_names("dev, test;prod, DEV") == ["DEV", "TEST", "PROD"]
+
+
+def test_should_offer_setup_when_no_workspace_ids_are_configured():
+    config = FabricAdminConfig(
+        environments=(
+            FabricEnvironment("DEV", "", ""),
+            FabricEnvironment("PROD", "", ""),
+        )
+    )
+    assert configured_workspace_count(config) == 0
+    assert should_offer_setup(config) is True
 
 
 def test_extract_folder_fields_finds_nested_metadata():
@@ -219,6 +233,25 @@ def test_build_update_from_git_body_supports_remote_hash_and_policy():
     body = build_update_from_git_body("abc123", "PreferWorkspace")
     assert body["remoteCommitHash"] == "abc123"
     assert body["conflictResolution"]["conflictResolutionType"] == "PreferWorkspace"
+
+
+def test_print_config_summary_shows_environments(monkeypatch, capsys):
+    monkeypatch.setattr(admin_console, "get_config_path", lambda: "C:/fake/.fabric-admin-console/config.toml")
+    print_config_summary(
+        FabricAdminConfig(
+            deployment_pipeline_id="dp-1",
+            environments=(
+                FabricEnvironment("DEV", "ws-dev", "stage-dev"),
+                FabricEnvironment("PROD", "", ""),
+            ),
+        )
+    )
+    out = capsys.readouterr().out
+    assert "Active configuration" in out
+    assert "C:/fake/.fabric-admin-console/config.toml" in out
+    assert "DEV" in out
+    assert "ws-dev" in out
+    assert "PROD" in out
 
 
 def test_select_git_changes_ignores_invalid_indexes():

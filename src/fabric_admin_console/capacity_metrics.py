@@ -102,7 +102,18 @@ def _pct(part, total):
 
 def _bar(pct_val, width: int = 20):
     filled = int(round(pct_val / 100 * width))
-    return "█" * filled + "░" * (width - filled)
+    return "#" * filled + "-" * (width - filled)
+
+
+def _summary_box_lines(total_cu, total_ops, total_fail, total_throttle):
+    return [
+        "  +-------------------------------------------------+",
+        f"  |  Total CU (s):     {_fmt_cu(total_cu):>12}               |",
+        f"  |  Total Operations: {_fmt_num(total_ops):>12}               |",
+        f"  |  Total Failures:   {_fmt_num(total_fail):>12}  ({_pct(total_fail, total_ops):.1f}%)     |",
+        f"  |  Throttling (min): {total_throttle:>12.1f}               |",
+        "  +-------------------------------------------------+",
+    ]
 
 
 def _build_item_lookup(token: str):
@@ -144,12 +155,8 @@ def show_capacity_summary(token: str):
         total_ops = sum(int(float(_col(r, "TotalOps") or 0)) for r in kind_rows)
         total_fail = sum(int(float(_col(r, "Failures") or 0)) for r in kind_rows)
         total_throttle = sum(float(_col(r, "Throttling") or 0) for r in kind_rows)
-        print(f"\n  ┌─────────────────────────────────────────────────┐")
-        print(f"  │  Total CU (s):     {_fmt_cu(total_cu):>12}                │")
-        print(f"  │  Total Operations:  {_fmt_num(total_ops):>11}                │")
-        print(f"  │  Total Failures:    {_fmt_num(total_fail):>11}  ({_pct(total_fail, total_ops):.1f}%)       │")
-        print(f"  │  Throttling (min):  {total_throttle:>11.1f}                │")
-        print("  └─────────────────────────────────────────────────┘")
+        for line in _summary_box_lines(total_cu, total_ops, total_fail, total_throttle):
+            print(line)
 
 
 def show_all(token: str):

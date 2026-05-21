@@ -59,6 +59,7 @@ AZURE_CLIENT_SECRET=...
 ```
 
 Workspace IDs, deployment pipeline IDs, and deployment stage IDs can now be configured interactively through the app instead of living in `.env`.
+The `WS_DEV`, `STAGE_DEV`, and similar names in `.env.template` are only optional override examples, not required fixed environment names.
 
 ## Running
 
@@ -87,9 +88,11 @@ Current interactive menus include:
 
 1. Launch the CLI.
 2. Run `Doctor` to validate Azure credentials and basic API access.
-3. Run `Setup` to define the environment names you actually use, such as `DEV,TEST,PROD` or `CHI,IND`.
-4. Save workspace IDs and deployment stage IDs into the local user config.
-5. Return to `Deployments`, `Pipelines`, or `Semantic Models`.
+3. If no workspaces are configured yet, the CLI will offer to launch `Setup` immediately.
+4. Run `Setup` to define the environment names you actually use, such as `DEV,TEST,PROD` or `CHI,IND`.
+5. Paste the workspace IDs and, if relevant, the deployment stage IDs for each environment.
+6. Save the config and review the printed summary.
+7. Return to `Deployments`, `Pipelines`, `Semantic Models`, or `Workspace Git`.
 
 The setup command writes a local config file outside the repo:
 

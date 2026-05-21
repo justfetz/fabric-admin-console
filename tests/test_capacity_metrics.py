@@ -5,6 +5,7 @@ from fabric_admin_console.capacity_metrics import (
     _fmt_cu,
     _fmt_num,
     _pct,
+    _summary_box_lines,
     show_capacity_summary,
 )
 
@@ -23,10 +24,17 @@ def test_fmt_num_and_pct():
 
 
 def test_bar_and_column_lookup():
-    assert _bar(50, width=10) == "█████░░░░░"
+    assert _bar(50, width=10) == "#####-----"
     row = {"Items[ItemName]": "Pipeline A", "Foo[Bar]": 3}
     assert _col(row, "ItemName") == "Pipeline A"
     assert _col(row, "Missing") is None
+
+
+def test_summary_box_lines_use_safe_ascii_rendering():
+    lines = _summary_box_lines(1000, 10, 1, 0.0)
+    assert lines[0].startswith("  +")
+    assert "Total Operations" in lines[2]
+    assert lines[-1].startswith("  +")
 
 
 def test_build_item_lookup_uses_execute_dax(monkeypatch):

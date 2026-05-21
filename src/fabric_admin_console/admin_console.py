@@ -178,6 +178,25 @@ def configured_environment_names(config=None):
     return [env.name for env in (config or get_active_config()).environments]
 
 
+def configured_workspace_count(config=None):
+    return sum(1 for value in get_active_workspaces(config).values() if value)
+
+
+def should_offer_setup(config=None):
+    return configured_workspace_count(config) == 0
+
+
+def print_config_summary(config=None):
+    active_config = config or get_active_config()
+    print(f"\n  {C.BOLD}Active configuration{C.END}\n")
+    print(f"    Config file: {get_config_path()}")
+    print(f"    Deployment pipeline ID: {get_active_deploy_pipeline_id(active_config) or '-'}")
+    for env in active_config.environments:
+        workspace = env.workspace_id or "-"
+        stage = env.stage_id or "-"
+        print(f"    {env.name:<12} workspace={workspace}  stage={stage}")
+
+
 def _get_nested_val(data, *keys):
     current = data
     for key in keys:
@@ -580,10 +599,12 @@ def cmd_setup():
     path = save_admin_config(config)
     ok(f"Saved Fabric Admin Console config to {path}")
     info("Azure tenant/client credentials still belong in .env or environment variables.")
+    print_config_summary(config)
 
 
 def run_doctor(client):
     print(f"\n{C.BOLD}{C.CYAN}-- Doctor --------------------------------------------{C.END}\n")
+    info(f"Local config path: {get_config_path()}")
 
     all_good = True
     for name, present in get_required_env_status():
@@ -1211,6 +1232,13 @@ def main():
     except Exception as exc:
         fail(f"Auth failed: {exc}")
         raise SystemExit(1) from exc
+
+    active_config = get_active_config()
+    if should_offer_setup(active_config):
+        warn("No workspace aliases are configured yet.")
+        info("Run Setup once to define the environment names and workspace IDs you actually use.")
+        if confirm("Launch Setup now?", "y"):
+            cmd_setup()
 
     while True:
         print(
