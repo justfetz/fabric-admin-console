@@ -13,7 +13,7 @@ This public-safe version is designed to help operators and engineers:
 - compare and submit deployment-pipeline promotions
 - run smart deploys that exclude known unsupported item types
 - diagnose workspace item drift and folder path collisions
-- inspect semantic models and refresh history
+- inspect semantic models, bindings, ownership, and refresh behavior
 - query Fabric Capacity Metrics through the Power BI Execute Queries API
 - build higher-level admin workflows without hard-coding tenant-specific values
 
@@ -144,12 +144,12 @@ The current tool is strongest for:
 - workspace inspection
 - deployment pipeline comparison and promotion
 - pipeline runs and job monitoring
-- semantic model listing and refresh-history inspection
+- semantic model connection inspection and rebinding
+- semantic model takeover, refresh, and refresh-history inspection
 - capacity metrics summaries
 
 The next high-value growth areas are:
 
-- semantic model connection binding, takeover, and refresh workflows in the CLI
 - pipeline parameter capture and schedule creation
 - workspace Git helpers
 - richer Power BI dataset operations where Fabric still depends on them

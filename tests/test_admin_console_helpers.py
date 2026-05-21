@@ -21,6 +21,9 @@ from fabric_admin_console.admin_console import (
     split_smart_deploy_items,
     run_doctor,
     safe_values,
+    semantic_model_connection_label,
+    semantic_model_connection_path,
+    semantic_model_connection_type,
     show_workspace_overview,
 )
 
@@ -164,6 +167,17 @@ def test_pick_semantic_model_lists_models(monkeypatch):
     assert result["id"] == "sm-1"
 
 
+def test_semantic_model_connection_helpers_prefer_nested_details():
+    connection = {
+        "displayName": "Pilot SQL",
+        "id": "conn-1",
+        "connectionDetails": {"type": "SQL", "path": "server;database"},
+    }
+    assert semantic_model_connection_type(connection) == "SQL"
+    assert semantic_model_connection_path(connection) == "server;database"
+    assert semantic_model_connection_label(connection) == "Pilot SQL [SQL] | server;database"
+
+
 def test_run_doctor_reports_basic_health(monkeypatch, capsys):
     monkeypatch.setenv("AZURE_TENANT_ID", "tenant")
     monkeypatch.setenv("AZURE_CLIENT_ID", "client")
@@ -235,7 +249,7 @@ def test_cmd_semantic_models_lists_models(monkeypatch, capsys):
 
 
 def test_cmd_semantic_models_prints_refresh_history(monkeypatch, capsys):
-    answers = iter(["2", "1", "1", "0"])
+    answers = iter(["7", "1", "1", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
 
     class FakeClient:
@@ -263,6 +277,123 @@ def test_cmd_semantic_models_prints_refresh_history(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "2026-05-20 08:00:00" in out
     assert "Completed" in out
+
+
+def test_cmd_semantic_models_shows_model_connections(monkeypatch, capsys):
+    answers = iter(["2", "1", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def get_sm_connections(self, workspace_id, model_id):
+            assert workspace_id == "ws-1"
+            assert model_id == "sm-1"
+            return {
+                "value": [
+                    {
+                        "displayName": "Pilot SQL",
+                        "id": "conn-1",
+                        "connectionDetails": {"type": "SQL", "path": "server;db"},
+                    }
+                ]
+            }
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Connections for Finance Model" in out
+    assert "Pilot SQL" in out
+    assert "server;db" in out
+
+
+def test_cmd_semantic_models_binds_existing_connection(monkeypatch, capsys):
+    answers = iter(["4", "1", "1", "y", "1", "", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    called = {}
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def get_sm_connections(self, workspace_id, model_id):
+            return {"value": []}
+
+        def list_connections(self):
+            return {
+                "value": [
+                    {
+                        "displayName": "Pilot SQL",
+                        "id": "conn-1",
+                        "connectionDetails": {"type": "SQL", "path": "server;db"},
+                    }
+                ]
+            }
+
+        def bind_sm_connection(self, workspace_id, model_id, connection_id, connection_type="SQL", connection_path=None):
+            called["args"] = (
+                workspace_id,
+                model_id,
+                connection_id,
+                connection_type,
+                connection_path,
+            )
+            return {"status": "Succeeded"}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Connection binding submitted" in out
+    assert called["args"] == ("ws-1", "sm-1", "conn-1", "SQL", "server;db")
+
+
+def test_cmd_semantic_models_triggers_refresh(monkeypatch, capsys):
+    answers = iter(["6", "1", "1", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    called = {}
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def refresh_dataset(self, workspace_id, model_id):
+            called["args"] = (workspace_id, model_id)
+            return {"status": "Accepted"}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Refresh submitted for Finance Model" in out
+    assert called["args"] == ("ws-1", "sm-1")
+
+
+def test_cmd_semantic_models_takes_over_model(monkeypatch, capsys):
+    answers = iter(["5", "1", "1", "y", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    called = {}
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_semantic_models(self, workspace_id):
+            return {"value": [{"displayName": "Finance Model", "id": "sm-1"}]}
+
+        def takeover_dataset(self, workspace_id, model_id):
+            called["args"] = (workspace_id, model_id)
+            return {"status": "Accepted"}
+
+    cmd_semantic_models(FakeClient())
+    out = capsys.readouterr().out
+    assert "Takeover submitted for Finance Model" in out
+    assert called["args"] == ("ws-1", "sm-1")
 
 
 def test_cmd_deployments_compares_stages(monkeypatch, capsys):

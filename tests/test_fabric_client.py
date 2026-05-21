@@ -44,6 +44,15 @@ def test_bind_sm_connection_uses_shareable_cloud_body():
     assert body["connectionBinding"]["connectivityType"] == "ShareableCloud"
 
 
+def test_bind_sm_connection_without_existing_connection_uses_none_connectivity():
+    client = make_client()
+    with patch.object(client, "post", return_value={"ok": True}) as post:
+        client.bind_sm_connection("ws", "sm", None, connection_type="SQL", connection_path="server;db")
+    body = post.call_args.args[1]
+    assert body["connectionBinding"]["connectivityType"] == "None"
+    assert body["connectionBinding"]["connectionDetails"]["path"] == "server;db"
+
+
 def test_pbi_request_wraps_list_payload():
     client = make_client()
     response = Mock(status_code=200)
@@ -97,3 +106,40 @@ def test_deploy_stage_posts_body_to_deploy_endpoint():
         client.deploy_stage("dp", body)
     assert post.call_args.args[0] == "/deploymentPipelines/dp/deploy"
     assert post.call_args.args[1] == body
+
+
+def test_list_connections_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "get", return_value={"value": []}) as get:
+        client.list_connections()
+    assert get.call_args.args[0] == "/connections"
+
+
+def test_get_sm_connections_uses_expected_path():
+    client = make_client()
+    with patch.object(client, "get", return_value={"value": []}) as get:
+        client.get_sm_connections("ws", "sm")
+    assert get.call_args.args[0] == "/workspaces/ws/semanticModels/sm/connections"
+
+
+def test_takeover_dataset_uses_powerbi_groups_path():
+    client = make_client()
+    with patch.object(client, "_pbi_request", return_value={"status": "Accepted"}) as req:
+        client.takeover_dataset("ws", "sm")
+    assert req.call_args.args == ("POST", "/groups/ws/datasets/sm/Default.TakeOver")
+
+
+def test_refresh_dataset_uses_powerbi_refreshes_path():
+    client = make_client()
+    with patch.object(client, "_pbi_request", return_value={"status": "Accepted"}) as req:
+        client.refresh_dataset("ws", "sm")
+    assert req.call_args.args[0] == "POST"
+    assert req.call_args.args[1] == "/groups/ws/datasets/sm/refreshes"
+    assert req.call_args.args[2]["notifyOption"] == "NoNotification"
+
+
+def test_get_refresh_history_uses_powerbi_refreshes_path():
+    client = make_client()
+    with patch.object(client, "_pbi_request", return_value={"value": []}) as req:
+        client.get_refresh_history("ws", "sm", top=5)
+    assert req.call_args.args == ("GET", "/groups/ws/datasets/sm/refreshes?$top=5")

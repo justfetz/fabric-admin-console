@@ -346,6 +346,75 @@ def compare_workspace_items(source_items, target_items):
     }
 
 
+def semantic_model_connection_name(connection):
+    return (
+        connection.get("displayName")
+        or connection.get("name")
+        or connection.get("id")
+        or "?"
+    )
+
+
+def semantic_model_connection_path(connection):
+    details = connection.get("connectionDetails")
+    if isinstance(details, dict):
+        path = details.get("path")
+        if isinstance(path, str) and path.strip():
+            return path
+    path = connection.get("path")
+    if isinstance(path, str) and path.strip():
+        return path
+    return ""
+
+
+def semantic_model_connection_type(connection, default="SQL"):
+    details = connection.get("connectionDetails")
+    if isinstance(details, dict):
+        ctype = details.get("type")
+        if isinstance(ctype, str) and ctype.strip():
+            return ctype
+    ctype = connection.get("type")
+    if isinstance(ctype, str) and ctype.strip():
+        return ctype
+    return default
+
+
+def semantic_model_connection_label(connection):
+    name = semantic_model_connection_name(connection)
+    ctype = semantic_model_connection_type(connection)
+    path = semantic_model_connection_path(connection)
+    tail = f" | {path}" if path else ""
+    return f"{name} [{ctype}]{tail}"
+
+
+def print_semantic_model_connections(connections, title):
+    print(f"\n  {C.BOLD}{title}{C.END}\n")
+    if not connections:
+        warn("No connections found.")
+        return
+    for index, connection in enumerate(connections, 1):
+        name = semantic_model_connection_name(connection)
+        ctype = semantic_model_connection_type(connection)
+        path = semantic_model_connection_path(connection) or "-"
+        conn_id = connection.get("id", "-")
+        print(f"    {index:3d}  {name:<28} {ctype:<10} {path}")
+        print(f"         {C.DIM}{conn_id}{C.END}")
+
+
+def print_refresh_history_runs(history, model_name):
+    print(f"\n  {C.BOLD}Refresh history: {model_name}{C.END}\n")
+    if not history:
+        warn("No refresh history found.")
+        return
+    for run in history:
+        start = str(run.get("startTime", "?"))[:19].replace("T", " ")
+        end = str(run.get("endTime", ""))
+        end = end[:19].replace("T", " ") if end else "-"
+        status = run.get("status", "?")
+        rtype = run.get("refreshType", "?")
+        print(f"    {start:<20} {end:<20} {rtype:<12} {status}")
+
+
 def detect_folder_path_collisions(items):
     by_norm = {}
     for item in items:
@@ -786,7 +855,12 @@ def cmd_semantic_models(client):
   {C.BOLD}SEMANTIC MODELS{C.END}
 
     {C.CYAN}1{C.END}  List semantic models             Show semantic models in a workspace
-    {C.CYAN}2{C.END}  Show refresh history            Display recent refresh runs
+    {C.CYAN}2{C.END}  Show model connections          Inspect current bindings on one model
+    {C.CYAN}3{C.END}  List shared connections         Show tenant-level reusable connections
+    {C.CYAN}4{C.END}  Bind model connection           Rebind one model to a selected connection or path
+    {C.CYAN}5{C.END}  Take over model                 Take ownership through Power BI dataset API
+    {C.CYAN}6{C.END}  Refresh model                   Trigger a refresh through Power BI dataset API
+    {C.CYAN}7{C.END}  Show refresh history            Display recent refresh runs
     {C.DIM}  0  Back{C.END}
 """
         )
@@ -813,18 +887,119 @@ def cmd_semantic_models(client):
             model = pick_semantic_model(client, workspace["id"], "Which semantic model?")
             if not model:
                 continue
-            history = safe_values(client.get_refresh_history(workspace["id"], model["id"]))
-            print(f"\n  {C.BOLD}Refresh history: {model['displayName']}{C.END}\n")
-            if not history:
-                warn("No refresh history found.")
+            connections = safe_values(client.get_sm_connections(workspace["id"], model["id"]))
+            print_semantic_model_connections(
+                connections,
+                f"Connections for {model['displayName']}",
+            )
+
+        elif choice == "3":
+            connections = safe_values(client.list_connections())
+            print_semantic_model_connections(connections, "Tenant shared connections")
+
+        elif choice == "4":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
                 continue
-            for run in history:
-                start = str(run.get("startTime", "?"))[:19].replace("T", " ")
-                end = str(run.get("endTime", ""))
-                end = end[:19].replace("T", " ") if end else "-"
-                status = run.get("status", "?")
-                rtype = run.get("refreshType", "?")
-                print(f"    {start:<20} {end:<20} {rtype:<12} {status}")
+            model = pick_semantic_model(client, workspace["id"], "Which semantic model?")
+            if not model:
+                continue
+            current_connections = safe_values(client.get_sm_connections(workspace["id"], model["id"]))
+            if current_connections:
+                print_semantic_model_connections(
+                    current_connections,
+                    f"Current bindings for {model['displayName']}",
+                )
+            use_existing = confirm("Use an existing shared connection?", "y")
+            if use_existing:
+                connections = safe_values(client.list_connections())
+                if not connections:
+                    warn("No shared connections available.")
+                    continue
+                connection = pick_from_list(
+                    connections,
+                    semantic_model_connection_label,
+                    "Select shared connection",
+                )
+                if not connection:
+                    continue
+                default_path = semantic_model_connection_path(connection)
+                connection_path = prompt(
+                    "Connection path (server/database or equivalent)",
+                    default_path,
+                )
+                if not connection_path:
+                    fail("Connection path is required.")
+                    continue
+                connection_type = semantic_model_connection_type(connection)
+                result = client.bind_sm_connection(
+                    workspace["id"],
+                    model["id"],
+                    connection.get("id"),
+                    connection_type=connection_type,
+                    connection_path=connection_path,
+                )
+            else:
+                connection_type = prompt("Connection type", "SQL")
+                connection_path = prompt("Connection path (server/database or equivalent)")
+                if not connection_path:
+                    fail("Connection path is required.")
+                    continue
+                result = client.bind_sm_connection(
+                    workspace["id"],
+                    model["id"],
+                    None,
+                    connection_type=connection_type or "SQL",
+                    connection_path=connection_path,
+                )
+            if result and not result.get("error"):
+                ok(f"Connection binding submitted for {model['displayName']}")
+                show_json(result)
+            else:
+                fail(f"Connection binding failed: {result}")
+
+        elif choice == "5":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            model = pick_semantic_model(client, workspace["id"], "Which semantic model?")
+            if not model:
+                continue
+            warn("This uses the Power BI dataset ownership endpoint against the semantic model ID.")
+            if not confirm(f"Take over {model['displayName']}?"):
+                continue
+            result = client.takeover_dataset(workspace["id"], model["id"])
+            if result and not result.get("error"):
+                ok(f"Takeover submitted for {model['displayName']}")
+                show_json(result)
+            else:
+                fail(f"Takeover failed: {result}")
+
+        elif choice == "6":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            model = pick_semantic_model(client, workspace["id"], "Which semantic model?")
+            if not model:
+                continue
+            if not confirm(f"Trigger a refresh for {model['displayName']}?", "y"):
+                continue
+            result = client.refresh_dataset(workspace["id"], model["id"])
+            if result and not result.get("error"):
+                ok(f"Refresh submitted for {model['displayName']}")
+                show_json(result)
+            else:
+                fail(f"Refresh failed: {result}")
+
+        elif choice == "7":
+            workspace = pick_workspace(client, "Which workspace?")
+            if not workspace:
+                continue
+            model = pick_semantic_model(client, workspace["id"], "Which semantic model?")
+            if not model:
+                continue
+            history = safe_values(client.get_refresh_history(workspace["id"], model["id"]))
+            print_refresh_history_runs(history, model["displayName"])
 
         else:
             fail("Invalid option.")
