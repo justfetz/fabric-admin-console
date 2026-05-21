@@ -13,16 +13,19 @@ from fabric_admin_console.admin_console import (
     cmd_semantic_models,
     build_commit_to_git_body,
     build_update_from_git_body,
+    decode_pipeline_definition_payload,
     extract_folder_fields,
     get_required_env_status,
     git_connection_summary,
     git_status_changes,
+    pipeline_terminal_state,
     pick_pipeline,
     pick_semantic_model,
     normalize_path,
     parse_environment_names,
     pick_from_list,
     resolve_best_path,
+    select_git_changes,
     split_smart_deploy_items,
     run_doctor,
     safe_values,
@@ -218,6 +221,31 @@ def test_build_update_from_git_body_supports_remote_hash_and_policy():
     assert body["conflictResolution"]["conflictResolutionType"] == "PreferWorkspace"
 
 
+def test_select_git_changes_ignores_invalid_indexes():
+    changes = [{"itemId": "a"}, {"itemId": "b"}]
+    assert select_git_changes(changes, "2, x, 99, 1") == [{"itemId": "b"}, {"itemId": "a"}]
+
+
+def test_pipeline_terminal_state_handles_non_dict_payloads():
+    assert pipeline_terminal_state({"status": "Completed"}) == "Completed"
+    assert pipeline_terminal_state("bad") == "Unknown"
+
+
+def test_decode_pipeline_definition_payload_returns_json_object():
+    payload = "eyJuYW1lIjogIkRhaWx5IExvYWQifQ=="
+    result = {
+        "definition": {
+            "parts": [{"path": "pipeline-content.json", "payload": payload}]
+        }
+    }
+    assert decode_pipeline_definition_payload(result) == {"name": "Daily Load"}
+
+
+def test_decode_pipeline_definition_payload_returns_none_when_missing():
+    assert decode_pipeline_definition_payload({"definition": {"parts": []}}) is None
+    assert decode_pipeline_definition_payload({"error": True}) is None
+
+
 def test_run_doctor_reports_basic_health(monkeypatch, capsys):
     monkeypatch.setenv("AZURE_TENANT_ID", "tenant")
     monkeypatch.setenv("AZURE_CLIENT_ID", "client")
@@ -268,6 +296,25 @@ def test_cmd_pipelines_lists_pipelines(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Daily Load" in out
     assert "pipe-1" in out
+
+
+def test_cmd_pipelines_warns_when_definition_part_missing(monkeypatch, capsys):
+    answers = iter(["4", "1", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def list_items(self, workspace_id, item_type=None):
+            return {"value": [{"displayName": "Daily Load", "id": "pipe-1"}]}
+
+        def get_pipeline_definition(self, workspace_id, pipeline_id):
+            return {"definition": {"parts": []}}
+
+    cmd_pipelines(FakeClient())
+    out = capsys.readouterr().out
+    assert "No pipeline-content.json part found" in out
 
 
 def test_cmd_semantic_models_lists_models(monkeypatch, capsys):
@@ -489,6 +536,26 @@ def test_cmd_workspace_git_commits_selected_changes(monkeypatch, capsys):
     assert called["args"][1]["mode"] == "Selective"
     assert called["args"][1]["comment"] == "Selective sync"
     assert called["args"][1]["items"] == [{"itemId": "item-1"}, {"itemId": "item-2"}]
+
+
+def test_cmd_workspace_git_rejects_invalid_selected_changes(monkeypatch, capsys):
+    answers = iter(["5", "1", "x,99", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    class FakeClient:
+        def list_workspaces(self):
+            return {"value": [{"displayName": "Ops", "id": "ws-1"}]}
+
+        def get_git_status(self, workspace_id):
+            return {
+                "changes": [
+                    {"itemId": "item-1", "itemType": "Notebook", "displayName": "Ops Notebook", "workspaceChange": "Modified", "remoteChange": "Same"},
+                ]
+            }
+
+    cmd_workspace_git(FakeClient())
+    out = capsys.readouterr().out
+    assert "No valid changes selected." in out
 
 
 def test_cmd_deployments_compares_stages(monkeypatch, capsys):

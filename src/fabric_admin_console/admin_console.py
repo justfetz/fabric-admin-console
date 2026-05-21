@@ -464,6 +464,40 @@ def build_update_from_git_body(remote_commit_hash=None, conflict_resolution_poli
     return body
 
 
+def select_git_changes(changes, raw_indexes):
+    selected = []
+    for raw_index in (raw_indexes or "").replace(";", ",").split(","):
+        raw_index = raw_index.strip()
+        if not raw_index:
+            continue
+        try:
+            idx = int(raw_index) - 1
+        except ValueError:
+            continue
+        if 0 <= idx < len(changes):
+            selected.append(changes[idx])
+    return selected
+
+
+def pipeline_terminal_state(status):
+    if not isinstance(status, dict):
+        return "Unknown"
+    return status.get("status", "Unknown")
+
+
+def decode_pipeline_definition_payload(result):
+    if not isinstance(result, dict):
+        return None
+    if result.get("error"):
+        return None
+    definition = result.get("definition", result.get("operation", {}).get("definition", {}))
+    parts = definition.get("parts", []) if isinstance(definition, dict) else []
+    for part in parts:
+        if part.get("path") == "pipeline-content.json":
+            return json.loads(base64.b64decode(part["payload"]).decode())
+    return None
+
+
 def print_git_status_changes(changes, title):
     print(f"\n  {C.BOLD}{title}{C.END}\n")
     if not changes:
@@ -652,7 +686,7 @@ def cmd_pipelines(client):
             try:
                 while True:
                     status = client.get_job_status(workspace["id"], pipeline["id"], job_id)
-                    state = status.get("status", "Unknown") if isinstance(status, dict) else "Unknown"
+                    state = pipeline_terminal_state(status)
                     print(f"    {time.strftime('%H:%M:%S')}  Status: {state}")
                     if state in ("Completed", "Succeeded", "Failed", "Cancelled"):
                         show_json(status)
@@ -674,17 +708,11 @@ def cmd_pipelines(client):
                 fail(f"Definition fetch failed: {result}")
                 continue
 
-            definition = result.get("definition", result.get("operation", {}).get("definition", {}))
-            parts = definition.get("parts", [])
-            found = False
-            for part in parts:
-                if part.get("path") == "pipeline-content.json":
-                    decoded = json.loads(base64.b64decode(part["payload"]).decode())
-                    show_json(decoded)
-                    found = True
-                    break
-            if not found:
+            decoded = decode_pipeline_definition_payload(result)
+            if decoded is None:
                 warn("No pipeline-content.json part found in definition payload.")
+                continue
+            show_json(decoded)
 
         else:
             fail("Invalid option.")
@@ -1156,17 +1184,7 @@ def cmd_workspace_git(client):
                 continue
             print_git_status_changes(changes, f"Select changes for {workspace['displayName']}")
             raw_indexes = prompt("Indexes to commit (comma-separated)")
-            selected = []
-            for raw_index in (raw_indexes or "").replace(";", ",").split(","):
-                raw_index = raw_index.strip()
-                if not raw_index:
-                    continue
-                try:
-                    idx = int(raw_index) - 1
-                except ValueError:
-                    continue
-                if 0 <= idx < len(changes):
-                    selected.append(changes[idx])
+            selected = select_git_changes(changes, raw_indexes)
             if not selected:
                 fail("No valid changes selected.")
                 continue
