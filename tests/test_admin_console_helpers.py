@@ -1,10 +1,12 @@
 import fabric_admin_console.admin_console as admin_console
+from fabric_admin_console.config import FabricAdminConfig, FabricEnvironment
 from fabric_admin_console.admin_console import (
     build_deploy_body,
     build_deploy_items,
     compare_deployment_items,
     compare_workspace_items,
     cmd_deployments,
+    cmd_setup,
     detect_folder_path_collisions,
     cmd_pipelines,
     cmd_semantic_models,
@@ -13,6 +15,7 @@ from fabric_admin_console.admin_console import (
     pick_pipeline,
     pick_semantic_model,
     normalize_path,
+    parse_environment_names,
     pick_from_list,
     resolve_best_path,
     split_smart_deploy_items,
@@ -30,6 +33,10 @@ def test_safe_values_handles_dict_and_list():
 
 def test_normalize_path_collapses_slashes_and_case():
     assert normalize_path(r" /Folder\\Sub//Path ") == "/folder/sub/path"
+
+
+def test_parse_environment_names_deduplicates_and_uppercases():
+    assert parse_environment_names("dev, test;prod, DEV") == ["DEV", "TEST", "PROD"]
 
 
 def test_extract_folder_fields_finds_nested_metadata():
@@ -259,8 +266,18 @@ def test_cmd_semantic_models_prints_refresh_history(monkeypatch, capsys):
 
 
 def test_cmd_deployments_compares_stages(monkeypatch, capsys):
-    monkeypatch.setattr(admin_console, "DEPLOY_PIPELINE_ID", "dp-1")
-    monkeypatch.setattr(admin_console, "DEPLOY_STAGES", {"DEV": "dev-stage", "PILOT": "pilot-stage", "PROD": "prod-stage"})
+    monkeypatch.setattr(
+        admin_console,
+        "get_active_config",
+        lambda: FabricAdminConfig(
+            deployment_pipeline_id="dp-1",
+            environments=(
+                FabricEnvironment("DEV", "dev-ws", "dev-stage"),
+                FabricEnvironment("PILOT", "pilot-ws", "pilot-stage"),
+                FabricEnvironment("PROD", "prod-ws", "prod-stage"),
+            ),
+        ),
+    )
     answers = iter(["1", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
 
@@ -289,8 +306,18 @@ def test_cmd_deployments_compares_stages(monkeypatch, capsys):
 
 
 def test_cmd_deployments_deploy_all_requires_confirmation_and_posts_body(monkeypatch, capsys):
-    monkeypatch.setattr(admin_console, "DEPLOY_PIPELINE_ID", "dp-1")
-    monkeypatch.setattr(admin_console, "DEPLOY_STAGES", {"DEV": "dev-stage", "PILOT": "pilot-stage", "PROD": "prod-stage"})
+    monkeypatch.setattr(
+        admin_console,
+        "get_active_config",
+        lambda: FabricAdminConfig(
+            deployment_pipeline_id="dp-1",
+            environments=(
+                FabricEnvironment("DEV", "dev-ws", "dev-stage"),
+                FabricEnvironment("PILOT", "pilot-ws", "pilot-stage"),
+                FabricEnvironment("PROD", "prod-ws", "prod-stage"),
+            ),
+        ),
+    )
     answers = iter(["3", "y", "", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     posted = {}
@@ -311,8 +338,18 @@ def test_cmd_deployments_deploy_all_requires_confirmation_and_posts_body(monkeyp
 
 
 def test_cmd_deployments_smart_deploy_excludes_unsupported_items(monkeypatch, capsys):
-    monkeypatch.setattr(admin_console, "DEPLOY_PIPELINE_ID", "dp-1")
-    monkeypatch.setattr(admin_console, "DEPLOY_STAGES", {"DEV": "dev-stage", "PILOT": "pilot-stage", "PROD": "prod-stage"})
+    monkeypatch.setattr(
+        admin_console,
+        "get_active_config",
+        lambda: FabricAdminConfig(
+            deployment_pipeline_id="dp-1",
+            environments=(
+                FabricEnvironment("DEV", "dev-ws", "dev-stage"),
+                FabricEnvironment("PILOT", "pilot-ws", "pilot-stage"),
+                FabricEnvironment("PROD", "prod-ws", "prod-stage"),
+            ),
+        ),
+    )
     answers = iter(["5", "1", "y", "", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     posted = {}
@@ -340,7 +377,17 @@ def test_cmd_deployments_smart_deploy_excludes_unsupported_items(monkeypatch, ca
 
 
 def test_cmd_deployments_workspace_diff(monkeypatch, capsys):
-    monkeypatch.setattr(admin_console, "WORKSPACES", {"DEV": "dev-ws", "PILOT": "pilot-ws", "PROD": ""})
+    monkeypatch.setattr(
+        admin_console,
+        "get_active_config",
+        lambda: FabricAdminConfig(
+            environments=(
+                FabricEnvironment("DEV", "dev-ws", "dev-stage"),
+                FabricEnvironment("PILOT", "pilot-ws", "pilot-stage"),
+                FabricEnvironment("PROD", "", ""),
+            ),
+        ),
+    )
     answers = iter(["6", "1", "2", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
 
@@ -377,3 +424,21 @@ def test_cmd_deployments_folder_scan(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Folder path collisions" in out
     assert "A" in out
+
+
+def test_cmd_setup_saves_environment_config(monkeypatch, capsys):
+    answers = iter(["DEV,TEST,PROD", "ws-dev", "stage-dev", "ws-test", "stage-test", "ws-prod", "stage-prod", "dp-1"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    monkeypatch.setattr(admin_console, "get_active_config", lambda: FabricAdminConfig())
+    saved = {}
+
+    def fake_save(config):
+        saved["config"] = config
+        return "C:/fake/.fabric-admin-console/config.toml"
+
+    monkeypatch.setattr(admin_console, "save_admin_config", fake_save)
+    cmd_setup()
+    out = capsys.readouterr().out
+    assert "Saved Fabric Admin Console config" in out
+    assert saved["config"].deployment_pipeline_id == "dp-1"
+    assert [env.name for env in saved["config"].environments] == ["DEV", "TEST", "PROD"]

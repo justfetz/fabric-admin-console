@@ -12,6 +12,7 @@ import os
 import time
 
 from .capacity_metrics import show_all
+from .config import FabricAdminConfig, FabricEnvironment, get_config_path, load_admin_config, save_admin_config
 from .fabric_client import FabricClient
 
 
@@ -157,6 +158,26 @@ def get_required_env_status(env=None):
     return [(name, bool(current_env.get(name))) for name in REQUIRED_ENV_VARS]
 
 
+def get_active_config():
+    return load_admin_config()
+
+
+def get_active_workspaces(config=None):
+    return (config or get_active_config()).workspaces()
+
+
+def get_active_deploy_stages(config=None):
+    return (config or get_active_config()).stages()
+
+
+def get_active_deploy_pipeline_id(config=None):
+    return (config or get_active_config()).deployment_pipeline_id
+
+
+def configured_environment_names(config=None):
+    return [env.name for env in (config or get_active_config()).environments]
+
+
 def _get_nested_val(data, *keys):
     current = data
     for key in keys:
@@ -212,12 +233,14 @@ def normalize_path(path):
     return normalized.casefold()
 
 
-def get_deployment_config_issues(source_env, target_env):
+def get_deployment_config_issues(source_env, target_env, config=None):
+    deployment_pipeline_id = get_active_deploy_pipeline_id(config)
+    stages = get_active_deploy_stages(config)
     issues = []
-    if not DEPLOY_PIPELINE_ID:
+    if not deployment_pipeline_id:
         issues.append("DEPLOY_PIPELINE_ID is not configured")
     for env_name in (source_env, target_env):
-        if not DEPLOY_STAGES.get(env_name):
+        if not stages.get(env_name):
             issues.append(f"STAGE_{env_name} is not configured")
     return issues
 
@@ -352,6 +375,52 @@ def show_capacity_dashboard(client):
     show_all(client._get_token())
 
 
+def parse_environment_names(raw_names):
+    names = []
+    for raw_name in raw_names.replace(";", ",").split(","):
+        name = raw_name.strip().upper()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def cmd_setup():
+    print(f"\n{C.BOLD}{C.CYAN}-- Setup ---------------------------------------------{C.END}\n")
+    current = get_active_config()
+    current_names = ", ".join(env.name for env in current.environments) or "DEV,PILOT,PROD"
+    raw_names = prompt("Environment names, comma-separated", current_names)
+    names = parse_environment_names(raw_names or "")
+    if not names:
+        fail("At least one environment name is required.")
+        return
+
+    environments = []
+    current_by_name = {env.name: env for env in current.environments}
+    for name in names:
+        existing = current_by_name.get(name, FabricEnvironment(name=name))
+        workspace_id = prompt(f"{name} workspace ID", existing.workspace_id)
+        stage_id = prompt(f"{name} deployment stage ID (blank if not using deployment pipelines)", existing.stage_id)
+        environments.append(
+            FabricEnvironment(
+                name=name,
+                workspace_id=workspace_id or "",
+                stage_id=stage_id or "",
+            )
+        )
+
+    deployment_pipeline_id = prompt(
+        "Deployment pipeline ID (blank if not using deployment pipelines)",
+        current.deployment_pipeline_id,
+    )
+    config = FabricAdminConfig(
+        deployment_pipeline_id=deployment_pipeline_id or "",
+        environments=tuple(environments),
+    )
+    path = save_admin_config(config)
+    ok(f"Saved Fabric Admin Console config to {path}")
+    info("Azure tenant/client credentials still belong in .env or environment variables.")
+
+
 def run_doctor(client):
     print(f"\n{C.BOLD}{C.CYAN}-- Doctor --------------------------------------------{C.END}\n")
 
@@ -363,7 +432,8 @@ def run_doctor(client):
             fail(f"{name} is missing")
             all_good = False
 
-    for alias, workspace_id in WORKSPACES.items():
+    active_config = get_active_config()
+    for alias, workspace_id in get_active_workspaces(active_config).items():
         if workspace_id:
             ok(f"Workspace alias {alias} is configured")
         else:
@@ -390,7 +460,7 @@ def run_doctor(client):
         fail(f"Workspace enumeration failed: {exc}")
         all_good = False
 
-    if DEPLOY_PIPELINE_ID:
+    if get_active_deploy_pipeline_id(active_config):
         ok("Deployment pipeline ID is configured")
     else:
         warn("Deployment pipeline ID is not configured")
@@ -508,23 +578,48 @@ def _print_deployment_errors(result):
 
 
 def _deployment_direction_from_choice(choice):
+    names = configured_environment_names()
+    if len(names) < 2:
+        return None, None
     if choice in ("1", "3"):
-        return "DEV", "PILOT"
-    if choice in ("2", "4"):
-        return "PILOT", "PROD"
+        return names[0], names[1]
+    if choice in ("2", "4") and len(names) >= 3:
+        return names[1], names[2]
     return None, None
+
+
+def build_adjacent_environment_pairs(config=None):
+    names = configured_environment_names(config)
+    return [
+        {"source": names[index], "target": names[index + 1]}
+        for index in range(len(names) - 1)
+    ]
 
 
 def cmd_deployments(client):
     while True:
+        active_config = get_active_config()
+        env_pairs = build_adjacent_environment_pairs(active_config)
+        first_pair = env_pairs[0] if env_pairs else {"source": "ENV1", "target": "ENV2"}
+        second_pair = env_pairs[1] if len(env_pairs) > 1 else None
+        second_label = (
+            f"Compare {second_pair['source']} vs {second_pair['target']}"
+            if second_pair
+            else "Compare next environment pair (configure 3+ envs)"
+        )
+        second_deploy_label = (
+            f"Deploy {second_pair['source']} -> {second_pair['target']}"
+            if second_pair
+            else "Deploy next environment pair (configure 3+ envs)"
+        )
         print(
             f"""
   {C.BOLD}DEPLOYMENTS{C.END}
 
-    {C.CYAN}1{C.END}  Compare DEV vs PILOT             Preview stage differences
-    {C.CYAN}2{C.END}  Compare PILOT vs PROD            Preview stage differences
-    {C.CYAN}3{C.END}  Deploy DEV -> PILOT              Promote all deployment-pipeline items
-    {C.CYAN}4{C.END}  Deploy PILOT -> PROD             Promote all deployment-pipeline items
+    {C.CYAN}1{C.END}  Compare {first_pair['source']} vs {first_pair['target']}             Preview stage differences
+    {C.CYAN}2{C.END}  {second_label:<34} Preview stage differences
+    {C.CYAN}3{C.END}  Deploy {first_pair['source']} -> {first_pair['target']}              Promote all deployment-pipeline items
+    {C.CYAN}4{C.END}  {second_deploy_label:<34} Promote all deployment-pipeline items
     {C.CYAN}5{C.END}  Smart deploy                     Exclude unsupported item types first
     {C.CYAN}6{C.END}  Workspace item diff              Compare all items between two workspaces
     {C.CYAN}7{C.END}  Folder conflict scan             Find folder path collisions
@@ -537,16 +632,21 @@ def cmd_deployments(client):
 
         if choice in ("1", "2"):
             source_env, target_env = _deployment_direction_from_choice(choice)
+            if not source_env or not target_env:
+                fail("Configure at least two adjacent environments first.")
+                continue
             issues = get_deployment_config_issues(source_env, target_env)
             if issues:
                 for issue in issues:
                     fail(issue)
                 continue
+            deployment_pipeline_id = get_active_deploy_pipeline_id()
+            stages = get_active_deploy_stages()
             source_items = safe_values(
-                client.get_deployment_stage_items(DEPLOY_PIPELINE_ID, DEPLOY_STAGES[source_env])
+                client.get_deployment_stage_items(deployment_pipeline_id, stages[source_env])
             )
             target_items = safe_values(
-                client.get_deployment_stage_items(DEPLOY_PIPELINE_ID, DEPLOY_STAGES[target_env])
+                client.get_deployment_stage_items(deployment_pipeline_id, stages[target_env])
             )
             diff = compare_deployment_items(source_items, target_items)
             print(f"\n  {C.BOLD}{source_env} -> {target_env}{C.END}")
@@ -559,17 +659,22 @@ def cmd_deployments(client):
 
         elif choice in ("3", "4"):
             source_env, target_env = _deployment_direction_from_choice(choice)
+            if not source_env or not target_env:
+                fail("Configure at least two adjacent environments first.")
+                continue
             issues = get_deployment_config_issues(source_env, target_env)
             if issues:
                 for issue in issues:
                     fail(issue)
                 continue
+            deployment_pipeline_id = get_active_deploy_pipeline_id()
+            stages = get_active_deploy_stages()
             warn(f"Deploy ALL items from {source_env} -> {target_env}")
             if not confirm("Proceed?"):
                 continue
             note = prompt("Deployment note", f"{source_env} -> {target_env}")
-            body = build_deploy_body(DEPLOY_STAGES[source_env], DEPLOY_STAGES[target_env], note=note)
-            result = client.deploy_stage(DEPLOY_PIPELINE_ID, body)
+            body = build_deploy_body(stages[source_env], stages[target_env], note=note)
+            result = client.deploy_stage(deployment_pipeline_id, body)
             if result and result.get("error"):
                 fail(f"Deployment {source_env} -> {target_env} failed")
                 _print_deployment_errors(result)
@@ -578,8 +683,12 @@ def cmd_deployments(client):
                 show_json(result)
 
         elif choice == "5":
+            env_pairs = build_adjacent_environment_pairs()
+            if not env_pairs:
+                fail("Configure at least two adjacent environments first.")
+                continue
             direction = pick_from_list(
-                [{"source": "DEV", "target": "PILOT"}, {"source": "PILOT", "target": "PROD"}],
+                env_pairs,
                 lambda item: f"{item['source']} -> {item['target']}",
                 "Direction",
             )
@@ -592,8 +701,10 @@ def cmd_deployments(client):
                 for issue in issues:
                     fail(issue)
                 continue
+            deployment_pipeline_id = get_active_deploy_pipeline_id()
+            stages = get_active_deploy_stages()
             all_items = safe_values(
-                client.get_deployment_stage_items(DEPLOY_PIPELINE_ID, DEPLOY_STAGES[source_env])
+                client.get_deployment_stage_items(deployment_pipeline_id, stages[source_env])
             )
             deployable, excluded = split_smart_deploy_items(all_items)
             print(f"\n  Deployable: {len(deployable)}  Excluded: {len(excluded)}\n")
@@ -608,12 +719,12 @@ def cmd_deployments(client):
                 continue
             note = prompt("Deployment note", f"Smart deploy {source_env} -> {target_env}")
             body = build_deploy_body(
-                DEPLOY_STAGES[source_env],
-                DEPLOY_STAGES[target_env],
+                stages[source_env],
+                stages[target_env],
                 note=note,
                 items=build_deploy_items(deployable),
             )
-            result = client.deploy_stage(DEPLOY_PIPELINE_ID, body)
+            result = client.deploy_stage(deployment_pipeline_id, body)
             if result and result.get("error"):
                 fail("Smart deploy failed")
                 _print_deployment_errors(result)
@@ -622,14 +733,15 @@ def cmd_deployments(client):
                 show_json(result)
 
         elif choice == "6":
-            source = pick_from_list([{"name": name} for name in WORKSPACES], lambda item: item["name"], "Source")
+            workspaces = get_active_workspaces()
+            source = pick_from_list([{"name": name} for name in workspaces], lambda item: item["name"], "Source")
             if not source:
                 continue
-            target = pick_from_list([{"name": name} for name in WORKSPACES], lambda item: item["name"], "Target")
+            target = pick_from_list([{"name": name} for name in workspaces], lambda item: item["name"], "Target")
             if not target:
                 continue
-            source_ws = WORKSPACES.get(source["name"])
-            target_ws = WORKSPACES.get(target["name"])
+            source_ws = workspaces.get(source["name"])
+            target_ws = workspaces.get(target["name"])
             if not source_ws or not target_ws:
                 fail("Both workspace aliases must be configured.")
                 continue
@@ -733,12 +845,13 @@ def main():
   {C.BOLD}MAIN MENU{C.END}
 
     {C.CYAN}1{C.END}  Doctor             Validate config and access
-    {C.CYAN}2{C.END}  Workspaces         View accessible workspaces
-    {C.CYAN}3{C.END}  Pipelines          List and run Fabric pipelines
-    {C.CYAN}4{C.END}  Deployments        Compare, deploy, and diagnose environment differences
-    {C.CYAN}5{C.END}  Semantic Models    Inspect models and refresh history
-    {C.CYAN}6{C.END}  Capacity           Show capacity metrics dashboard
-    {C.CYAN}7{C.END}  Raw workspace JSON Inspect one workspace record
+    {C.CYAN}2{C.END}  Setup              Configure environment names, workspaces, and stages
+    {C.CYAN}3{C.END}  Workspaces         View accessible workspaces
+    {C.CYAN}4{C.END}  Pipelines          List and run Fabric pipelines
+    {C.CYAN}5{C.END}  Deployments        Compare, deploy, and diagnose environment differences
+    {C.CYAN}6{C.END}  Semantic Models    Inspect models and refresh history
+    {C.CYAN}7{C.END}  Capacity           Show capacity metrics dashboard
+    {C.CYAN}8{C.END}  Raw workspace JSON Inspect one workspace record
     {C.DIM}  0  Exit{C.END}
 """
         )
@@ -749,16 +862,18 @@ def main():
         if choice == "1":
             run_doctor(client)
         elif choice == "2":
-            show_workspace_overview(client)
+            cmd_setup()
         elif choice == "3":
-            cmd_pipelines(client)
+            show_workspace_overview(client)
         elif choice == "4":
-            cmd_deployments(client)
+            cmd_pipelines(client)
         elif choice == "5":
-            cmd_semantic_models(client)
+            cmd_deployments(client)
         elif choice == "6":
-            show_capacity_dashboard(client)
+            cmd_semantic_models(client)
         elif choice == "7":
+            show_capacity_dashboard(client)
+        elif choice == "8":
             workspace = pick_workspace(client)
             if workspace:
                 show_json(workspace)
